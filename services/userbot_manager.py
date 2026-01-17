@@ -148,13 +148,40 @@ class UserBotManager:
                     logging.info(f"🕵️ Detected UNSUPPORTED media in message {message.id}. This usually means Desktop session mismatch.")
 
                 if (not message.text and not media_type) or is_unsupported:
-                    await asyncio.sleep(1)
+                    logging.info(f"🕵️ Message {message.id} looks empty or unsupported. Waiting 1.5s before RAW refetch...")
+                    await asyncio.sleep(1.5)
                     try:
+                        # Try high-level first
                         message = await client.get_messages(message.chat.id, message.id)
+                        logging.info(f"🕵️ High-level refetch result for {message.id}: media={message.media}")
                         
+                        # DEEP FALLBACK: RAW INVOKE (Crucial for View-Once)
+                        logging.info(f"🕵️ Attempting RAW INVOKE for message {message.id}...")
+                        try:
+                            raw_res = await client.invoke(
+                                raw.functions.messages.GetMessages(
+                                    id=[raw.types.InputMessageID(id=message.id)]
+                                )
+                            )
+                            if hasattr(raw_res, "messages") and raw_res.messages:
+                                r_msg = raw_res.messages[0]
+                                logging.info(f"🕵️ RAW DATA: {type(r_msg)}")
+                                if hasattr(r_msg, "media"):
+                                    logging.info(f"🕵️ RAW MEDIA: {type(r_msg.media)}")
+                                    # Check for Unsupported flag
+                                    if "Unsupported" in str(type(r_msg.media)):
+                                        logging.warning("⚠️ CRITICAL: Telegram returned MessageMediaUnsupported even on Mobile session!")
+                                    
+                                    # Force detection if we found something in raw
+                                    if hasattr(r_msg.media, "ttl_seconds") and r_msg.media.ttl_seconds:
+                                        has_ttl = True
+                                        logging.info("🕵️ RAW TTL detected!")
+                        except Exception as raw_e:
+                            logging.error(f"RAW INVOKE FAILED: {raw_e}")
+
                         # Re-calculate flags for refetched message
                         is_protected = getattr(message, "has_protected_content", False)
-                        has_ttl = getattr(message, "ttl_seconds", 0) > 0
+                        has_ttl = has_ttl or getattr(message, "ttl_seconds", 0) > 0
                         
                         if not media_type:
                             if message.photo: media_type = "photo"; file_id = get_fid(message.photo); content = content or "[Фотография]"
