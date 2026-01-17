@@ -40,8 +40,8 @@ class UserBotManager:
         try:
             client = Client(
                 name=f"mobile_session_{user_id}",
-                api_id=6,
-                api_hash="eb06d4ab3521ad1297404c23ad8d8e05",
+                api_id=int(config.API_ID) if config.API_ID else 0,
+                api_hash=config.API_HASH,
                 session_string=session_string,
                 in_memory=True,
                 device_model="Samsung SM-S918B",
