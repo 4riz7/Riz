@@ -127,7 +127,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     try:
         await status_msg.edit_text("⏳ Попытка 1: Прямое подключение...")
         client = Client(
-            name=f"auth_{message.from_user.id}", 
+            name=f"mobile_auth_{message.from_user.id}", 
             api_id=api_id, 
             api_hash=api_hash, 
             in_memory=True,
@@ -148,7 +148,7 @@ async def process_phone(message: types.Message, state: FSMContext):
             try:
                 await status_msg.edit_text(f"⏳ Попытка {i+2}: Использование прокси...")
                 client = Client(
-                    name=f"auth_{message.from_user.id}", 
+                    name=f"mobile_auth_{message.from_user.id}", 
                     api_id=api_id, 
                     api_hash=api_hash, 
                     in_memory=True,

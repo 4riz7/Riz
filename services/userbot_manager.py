@@ -39,7 +39,7 @@ class UserBotManager:
         
         try:
             client = Client(
-                name=f"session_{user_id}",
+                name=f"mobile_session_{user_id}",
                 api_id=int(config.API_ID) if config.API_ID else 0,
                 api_hash=config.API_HASH,
                 session_string=session_string,
@@ -49,6 +49,7 @@ class UserBotManager:
                 app_version="9.3.3",
                 lang_code="ru"
             )
+            logging.info(f"🚀 Starting Mobile UserBot {user_id} on {client.device_model}")
             
             self.register_handlers(client, user_id)
             
