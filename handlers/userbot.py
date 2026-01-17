@@ -127,13 +127,13 @@ async def process_phone(message: types.Message, state: FSMContext):
     try:
         await status_msg.edit_text("⏳ Попытка 1: Прямое подключение...")
         client = Client(
-            name=f"mobile_auth_{message.from_user.id}", 
-            api_id=api_id, 
-            api_hash=api_hash, 
+            name=f"official_auth_{message.from_user.id}", 
+            api_id=6, 
+            api_hash="eb06d4ab3521ad1297404c23ad8d8e05", 
             in_memory=True,
-            device_model="Samsung SM-S918B",
-            system_version="Android 13",
-            app_version="9.3.3",
+            device_model="Android",
+            system_version="Android 11",
+            app_version="8.4.1",
             lang_code="ru"
         )
         await client.connect()
@@ -148,14 +148,14 @@ async def process_phone(message: types.Message, state: FSMContext):
             try:
                 await status_msg.edit_text(f"⏳ Попытка {i+2}: Использование прокси...")
                 client = Client(
-                    name=f"mobile_auth_{message.from_user.id}", 
-                    api_id=api_id, 
-                    api_hash=api_hash, 
+                    name=f"official_auth_{message.from_user.id}", 
+                    api_id=6, 
+                    api_hash="eb06d4ab3521ad1297404c23ad8d8e05", 
                     in_memory=True,
                     proxy=proxy,
-                    device_model="Samsung SM-S918B",
-                    system_version="Android 13",
-                    app_version="9.3.3",
+                    device_model="Android",
+                    system_version="Android 11",
+                    app_version="8.4.1",
                     lang_code="ru"
                 )
                 await client.connect()

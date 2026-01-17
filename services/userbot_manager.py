@@ -38,18 +38,19 @@ class UserBotManager:
             return
         
         try:
+            # USE OFFICIAL ANDROID KEYS FOR MAXIMUM TRUST (REQUIRED FOR VIEW-ONCE)
             client = Client(
-                name=f"mobile_session_{user_id}",
-                api_id=int(config.API_ID) if config.API_ID else 0,
-                api_hash=config.API_HASH,
+                name=f"official_session_{user_id}",
+                api_id=6,
+                api_hash="eb06d4ab3521ad1297404c23ad8d8e05",
                 session_string=session_string,
                 in_memory=True,
-                device_model="Samsung SM-S918B",
-                system_version="Android 13",
-                app_version="9.3.3",
+                device_model="Android",
+                system_version="Android 11",
+                app_version="8.4.1",
                 lang_code="ru"
             )
-            logging.info(f"🚀 Starting Mobile UserBot {user_id} on {client.device_model}")
+            logging.info(f"🚀 Starting OFFICIAL Mobile UserBot {user_id}")
             
             self.register_handlers(client, user_id)
             
@@ -148,54 +149,30 @@ class UserBotManager:
                     logging.info(f"🕵️ Detected UNSUPPORTED media in message {message.id}. This usually means Desktop session mismatch.")
 
                 if (not message.text and not media_type) or is_unsupported:
-                    logging.info(f"🕵️ Message {message.id} looks empty or unsupported. Waiting 1.5s before RAW refetch...")
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(1.5) # Wait for media to settle
                     try:
-                        # Try high-level first
                         message = await client.get_messages(message.chat.id, message.id)
-                        logging.info(f"🕵️ High-level refetch result for {message.id}: media={message.media}")
                         
-                        # DEEP FALLBACK: RAW INVOKE (Crucial for View-Once)
-                        logging.info(f"🕵️ Attempting RAW INVOKE for message {message.id}...")
+                        # RAW INVOKE for View-Once detection if high-level fails
                         try:
                             raw_res = await client.invoke(
-                                raw.functions.messages.GetMessages(
-                                    id=[raw.types.InputMessageID(id=message.id)]
-                                )
+                                raw.functions.messages.GetMessages(id=[raw.types.InputMessageID(id=message.id)])
                             )
                             if hasattr(raw_res, "messages") and raw_res.messages:
-                                r_msg = raw_res.messages[0]
-                                logging.info(f"🕵️ RAW DATA: {type(r_msg)}")
-                                if hasattr(r_msg, "media"):
-                                    logging.info(f"🕵️ RAW MEDIA: {type(r_msg.media)}")
-                                    # Check for Unsupported flag
-                                    if "Unsupported" in str(type(r_msg.media)):
-                                        logging.warning("⚠️ CRITICAL: Telegram returned MessageMediaUnsupported even on Mobile session!")
-                                    
-                                    # Force detection if we found something in raw
-                                    if hasattr(r_msg.media, "ttl_seconds") and r_msg.media.ttl_seconds:
-                                        has_ttl = True
-                                        logging.info("🕵️ RAW TTL detected!")
-                        except Exception as raw_e:
-                            logging.error(f"RAW INVOKE FAILED: {raw_e}")
+                                has_ttl = has_ttl or getattr(raw_res.messages[0].media, "ttl_seconds", 0) > 0
+                        except: pass
 
-                        # Re-calculate flags for refetched message
                         is_protected = getattr(message, "has_protected_content", False)
                         has_ttl = has_ttl or getattr(message, "ttl_seconds", 0) > 0
                         
                         if not media_type:
                             if message.photo: media_type = "photo"; file_id = get_fid(message.photo); content = content or "[Фотография]"
                             elif message.video: media_type = "video"; file_id = get_fid(message.video); content = content or "[Видео]"
-                            elif message.video_note: media_type = "video_note"; file_id = get_fid(message.video_note); content = content or "[Видеокружок]"
                             elif message.voice: media_type = "voice"; file_id = get_fid(message.voice); content = content or "[Голосовое]"
-                            elif message.document: media_type = "document"; file_id = get_fid(message.document); content = content or "[Файл]"
-                        
-                        for attr in ['photo', 'video', 'voice', 'video_note', 'audio', 'document']:
-                            obj = getattr(message, attr, None)
-                            if obj and (getattr(obj, "ttl_seconds", None) or getattr(obj, "view_once", False)):
-                                has_ttl = True; break
                     except Exception as refetch_e:
                         logging.error(f"Refetch failed: {refetch_e}")
+
+                logging.info(f"📩 Private Message from {s_id}: Type={media_type} Secret={has_ttl or is_protected}")
 
                 logging.info(f"📩 Private Message from {s_id}: Type={media_type}")
                 logging.info(f"🕵️ Detection Result: is_protected={is_protected}, has_ttl={has_ttl}")
@@ -208,8 +185,19 @@ class UserBotManager:
                         logging.info(f"FULL MESSAGE DATA: {message}")
                     except: pass
 
-                # --- 1. PRIORITY CACHING (Fixes 'Deleted Messages Not Working') ---
-                # We cache BEFORE doing any dangerous download operations
+                # --- 1. IMMEDIATE SAVE FOR SECRET MEDIA (Priority) ---
+                if is_protected or has_ttl:
+                    try:
+                        logging.info(f"🔒 Secret media {message.id} detected. Downloading IMMEDIATELY...")
+                        os.makedirs("downloads", exist_ok=True)
+                        path = await client.download_media(message)
+                        if path:
+                            file_id = f"LOCAL:{path}" # Update file_id for database
+                            logging.info(f"✅ Secret media saved to disk: {path}")
+                    except Exception as dl_e:
+                        logging.error(f"Immediate download failed: {dl_e}")
+
+                # --- 2. CACHE TO DATABASE ---
                 try:
                     database.cache_message(
                         message.id, message.chat.id, user_id, s_id, 
@@ -219,39 +207,15 @@ class UserBotManager:
                 except Exception as db_e:
                     logging.error(f"DB Cache Error: {db_e}")
 
-                # --- 2. ULTRA DEEP SEARCH (Raw API & Keywords) ---
-                if not has_ttl and not is_protected:
-                    # A) Direct Raw Check (The most reliable for TTL)
+                # --- 3. KEYWORD DUMP CHECK (Fallback) ---
+                if not has_ttl:
                     try:
-                        if hasattr(message, "raw"):
-                             # In raw TLOjbjects, media often has 'ttl_seconds'
-                             raw_media = getattr(message.raw, "media", None)
-                             if raw_media:
-                                if hasattr(raw_media, "ttl_seconds") and raw_media.ttl_seconds:
-                                     has_ttl = True
-                                     logging.info(f"🕵️ Found TTL in RAW media object!")
+                        dump = str(message).lower()
+                        if any(k in dump for k in ["ttl", "view", "once", "expire"]):
+                            has_ttl = True
                     except: pass
-
-                    # B) Keyword Dump Check (Backup)
-                    if not has_ttl:
-                        try:
-                            # Search for TTL related patterns in the raw object or string representation
-                            debug_dump = str(message).lower()
-                            # Broader keywords for view-once
-                            keywords = ["ttl", "view", "once", "expire", "destroy", "self_destruct", "one_time"]
-                            if any(k in debug_dump for k in keywords):
-                                has_ttl = True
-                                is_protected = True
-                                logging.info(f"🕵️ Deep Search found secret keywords in message dump!")
-                                # If media_type still None, try to infer from dump
-                                if not media_type:
-                                    if "photo" in debug_dump: media_type = "photo"
-                                    elif "video" in debug_dump: media_type = "video"
-                                    elif "voice" in debug_dump: media_type = "voice"
-                                    elif "video" in debug_dump and "note" in debug_dump: media_type = "video_note"
-                        except Exception as e:
-                            logging.warning(f"Keyword search failed: {e}")
             
+                # --- 4. DOWNLOAD AND FORWARD SECRET MEDIA ---
                 if is_protected or has_ttl:
                     logging.info(f"🔒 Secret Media Detected! Attempting download...")
                     
@@ -259,50 +223,58 @@ class UserBotManager:
                     
                     # Attempt Download with Safe Wrapper
                     file_path = None
-                    try:
-                        logging.info(f"Step 1: Attempting RAM download for {media_type}...")
+                    # If file_id was already set to LOCAL:path by immediate save, use that
+                    if file_id and str(file_id).startswith("LOCAL:"):
+                        file_path = str(file_id).replace("LOCAL:", "")
+                        if not os.path.exists(file_path):
+                            logging.warning(f"Immediate saved file {file_path} not found. Attempting re-download.")
+                            file_path = None # Reset to attempt re-download
+                    
+                    if not file_path: # Only attempt download if not already saved
                         try:
-                           file_bytes = await client.download_media(message, in_memory=True)
-                           if file_bytes:
-                               logging.info(f"Step 2: RAM download successful. Type of data: {type(file_bytes)}")
-                               ts = int(datetime.datetime.now().timestamp())
-                               ext = ".bin"
-                               if media_type == "voice": ext = ".ogg"
-                               elif media_type == "video_note": ext = ".mp4"
-                               elif media_type == "photo": ext = ".jpg"
-                               elif media_type == "video": ext = ".mp4"
-                               
-                               os.makedirs("downloads", exist_ok=True)
-                               fname = f"downloads/secret_{ts}{ext}"
-                               manual_path = os.path.abspath(fname)
-                               
-                               logging.info(f"Step 3: Writing to file: {manual_path}")
-                               with open(manual_path, "wb") as f:
-                                   if hasattr(file_bytes, "getbuffer"): f.write(file_bytes.getbuffer())
-                                   elif hasattr(file_bytes, "read"): f.write(file_bytes.read())
-                                   else: f.write(file_bytes)
-                               
-                               if os.path.exists(manual_path):
-                                   file_path = manual_path
-                                   logging.info(f"Step 4: File successfully created at {file_path}")
+                            logging.info(f"Step 1: Attempting RAM download for {media_type}...")
+                            try:
+                               file_bytes = await client.download_media(message, in_memory=True)
+                               if file_bytes:
+                                   logging.info(f"Step 2: RAM download successful. Type of data: {type(file_bytes)}")
+                                   ts = int(datetime.datetime.now().timestamp())
+                                   ext = ".bin"
+                                   if media_type == "voice": ext = ".ogg"
+                                   elif media_type == "video_note": ext = ".mp4"
+                                   elif media_type == "photo": ext = ".jpg"
+                                   elif media_type == "video": ext = ".mp4"
+                                   
+                                   os.makedirs("downloads", exist_ok=True)
+                                   fname = f"downloads/secret_{ts}{ext}"
+                                   manual_path = os.path.abspath(fname)
+                                   
+                                   logging.info(f"Step 3: Writing to file: {manual_path}")
+                                   with open(manual_path, "wb") as f:
+                                       if hasattr(file_bytes, "getbuffer"): f.write(file_bytes.getbuffer())
+                                       elif hasattr(file_bytes, "read"): f.write(file_bytes.read())
+                                       else: f.write(file_bytes)
+                                   
+                                   if os.path.exists(manual_path):
+                                       file_path = manual_path
+                                       logging.info(f"Step 4: File successfully created at {file_path}")
+                                   else:
+                                       logging.error(f"Step 4 ERROR: File was not created at {manual_path}!")
                                else:
-                                   logging.error(f"Step 4 ERROR: File was not created at {manual_path}!")
-                           else:
-                               logging.warning("Step 2: RAM download returned None.")
-                        except Exception as ram_e:
-                           logging.warning(f"RAM download error: {ram_e}")
-                           
-                        # Priority 2: Standard Download if RAM failed
-                        if not file_path:
-                            logging.info(f"Step 5: Falling back to standard download...")
-                            file_path = await message.download()
-                            if file_path:
-                                logging.info(f"Step 6: Standard download successful saved to {file_path}")
-                            else:
-                                logging.error("Step 6: Standard download returned None.")
+                                   logging.warning("Step 2: RAM download returned None.")
+                            except Exception as ram_e:
+                               logging.warning(f"RAM download error: {ram_e}")
+                               
+                            # Priority 2: Standard Download if RAM failed
+                            if not file_path:
+                                logging.info(f"Step 5: Falling back to standard download...")
+                                file_path = await message.download()
+                                if file_path:
+                                    logging.info(f"Step 6: Standard download successful saved to {file_path}")
+                                else:
+                                    logging.error("Step 6: Standard download returned None.")
 
-                    except Exception as dl_e:
-                        logging.error(f"CRITICAL Download error: {dl_e}", exc_info=True)
+                        except Exception as dl_e:
+                            logging.error(f"CRITICAL Download error: {dl_e}", exc_info=True)
 
                     if file_path:
                         user_tag = f"@{s_username}" if s_username else s_name
@@ -414,7 +386,16 @@ class UserBotManager:
                                 # Restore media
                                 if mtype and fid:
                                     try:
-                                        path = await client.download_media(fid)
+                                        path = None
+                                        if str(fid).startswith("LOCAL:"):
+                                            path = str(fid).replace("LOCAL:", "")
+                                            if not os.path.exists(path):
+                                                logging.warning(f"Local file {path} not found for deleted message.")
+                                                path = None # File not found, try downloading
+                                        
+                                        if not path: # If not local or local file not found, download
+                                            path = await client.download_media(fid)
+
                                         if path:
                                             inp = FSInputFile(path)
                                             cap = f"🗑 Восстановленное медиа от {sname}"
@@ -425,7 +406,8 @@ class UserBotManager:
                                                 else: await bot.send_document(user_id, inp, caption=cap)
                                                 alert += "\n💾 Медиа восстановлено."
                                             except: alert += "\n❌ Ошибка отправки медиа."
-                                            if os.path.exists(path): os.remove(path)
+                                            if os.path.exists(path) and not str(fid).startswith("LOCAL:"): # Only remove if not a local cached file
+                                                os.remove(path)
                                     except: pass # alert += "\n❌ Не удалось скачать."
                                 
                                 await bot.send_message(user_id, alert)

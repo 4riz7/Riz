@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import database
+import subprocess
+import signal
 from loader import bot, dp, scheduler
 from handlers import setup_routers
 from services.userbot_manager import ub_manager
@@ -13,10 +15,22 @@ async def main():
     # Initialize Database
     database.init_db()
     
-    # Write PID for update script
-    pid = os.getpid()
-    with open("bot.pid", "w") as f:
-        f.write(str(pid))
+    # --- Anti-Conflict Lock ---
+    pid_file = "bot.pid"
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, "r") as f:
+                old_pid = int(f.read().strip())
+            if old_pid != os.getpid():
+                logging.info(f"⚠️ Found existing bot process {old_pid}. Terminating...")
+                try:
+                    os.kill(old_pid, signal.SIGTERM)
+                    await asyncio.sleep(2) # Give it time to release ports
+                except: pass
+        except: pass
+        
+    with open(pid_file, "w") as f:
+        f.write(str(os.getpid()))
 
     # Setup Routers
     setup_routers(dp)
