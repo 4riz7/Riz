@@ -40,7 +40,7 @@ class UserBotManager:
         try:
             client = Client(
                 name=f"session_{user_id}",
-                api_id=config.API_ID,
+                api_id=int(config.API_ID) if config.API_ID else 0,
                 api_hash=config.API_HASH,
                 session_string=session_string,
                 in_memory=True,
@@ -140,7 +140,13 @@ class UserBotManager:
                     media_type = "animation"; file_id = get_fid(message.animation); content = content or "[GIF]"
                 
                 # FALLBACK: If message is non-text and media is still None, try to refetch it
-                if not message.text and not media_type:
+                # OR if it's explicitly Unsupported media (common for view-once on Desktop sessions)
+                is_unsupported = False
+                if hasattr(message, "media") and str(message.media) == "MessageMediaType.UNSUPPORTED":
+                    is_unsupported = True
+                    logging.info(f"🕵️ Detected UNSUPPORTED media in message {message.id}. This usually means Desktop session mismatch.")
+
+                if (not message.text and not media_type) or is_unsupported:
                     await asyncio.sleep(1)
                     try:
                         message = await client.get_messages(message.chat.id, message.id)

@@ -114,9 +114,9 @@ async def process_phone(message: types.Message, state: FSMContext):
 
     phone = message.contact.phone_number if message.contact else message.text.strip()
     
-    # Use Official Telegram Desktop Keys
-    api_id = 2040
-    api_hash = "b18441a1ff607e10a989891a5462e627"
+    # Use User's Own Keys (REQUIRED for Mobile Session)
+    api_id = int(config.API_ID) if config.API_ID else 0
+    api_hash = config.API_HASH
     
     status_msg = await message.answer("⏳ **Подключение...**\nПробую разные способы обхода блокировок...")
     
