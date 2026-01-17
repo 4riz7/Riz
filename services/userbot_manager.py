@@ -43,7 +43,11 @@ class UserBotManager:
                 api_id=config.API_ID,
                 api_hash=config.API_HASH,
                 session_string=session_string,
-                in_memory=True
+                in_memory=True,
+                device_model="Samsung SM-S918B",
+                system_version="Android 13",
+                app_version="9.3.3",
+                lang_code="ru"
             )
             
             self.register_handlers(client, user_id)
@@ -137,47 +141,14 @@ class UserBotManager:
                 
                 # FALLBACK: If message is non-text and media is still None, try to refetch it
                 if not message.text and not media_type:
-                    logging.info(f"🕵️ Message {message.id} looks empty. Waiting 1.5s before refetch...")
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(1)
                     try:
                         message = await client.get_messages(message.chat.id, message.id)
-                        logging.info(f"🕵️ High-level refetch result for {message.id}: media={message.media}")
                         
-                        # DEEP FALLBACK: Try RAW API if high-level still sees nothing
-                        if not message.media and not message.text:
-                            logging.info(f"🕵️ High-level refetch still empty. Trying RAW INVOKE...")
-                            try:
-                                # Get raw message directly from Telegram
-                                raw_res = await client.invoke(
-                                    raw.functions.messages.GetMessages(
-                                        id=[raw.types.InputMessageID(id=message.id)]
-                                    )
-                                )
-                                logging.info(f"🕵️ RAW INVOKE SUCCESS. Result type: {type(raw_res)}")
-                                if hasattr(raw_res, "messages") and raw_res.messages:
-                                    r_msg = raw_res.messages[0]
-                                    logging.info(f"🕵️ RAW Message type: {type(r_msg)}")
-                                    if hasattr(r_msg, "media") and r_msg.media:
-                                        logging.info(f"🕵️ FOUND MEDIA IN RAW: {type(r_msg.media)}")
-                                        # Force detection of TTL in raw
-                                        if hasattr(r_msg.media, "ttl_seconds") and r_msg.media.ttl_seconds:
-                                            has_ttl = True
-                                            logging.info(f"🕵️ RAW TTL detected: {r_msg.media.ttl_seconds}")
-                                        # In some cases, view_once is a flag
-                                        if getattr(r_msg.media, "view_once", False):
-                                            has_ttl = True
-                                            logging.info(f"🕵️ RAW View-Once flag detected!")
-                                            
-                                        # If high-level failed to map media, we might need to manually extract file_id
-                                        # but typically if raw has it, re-calculating below might find it
-                            except Exception as raw_e:
-                                logging.error(f"RAW INVOKE FAILED: {raw_e}")
-
-                        # Re-calculate EVERYTHING for the refetched message
+                        # Re-calculate flags for refetched message
                         is_protected = getattr(message, "has_protected_content", False)
                         has_ttl = getattr(message, "ttl_seconds", 0) > 0
                         
-                        # Aggressive media check for all possible attributes
                         if not media_type:
                             if message.photo: media_type = "photo"; file_id = get_fid(message.photo); content = content or "[Фотография]"
                             elif message.video: media_type = "video"; file_id = get_fid(message.video); content = content or "[Видео]"
@@ -187,30 +158,8 @@ class UserBotManager:
                         
                         for attr in ['photo', 'video', 'voice', 'video_note', 'audio', 'document']:
                             obj = getattr(message, attr, None)
-                            if obj:
-                                if getattr(obj, "ttl_seconds", None) or getattr(obj, "view_once", False):
-                                    has_ttl = True; break
-                        
-                        # Even more aggressive: check the raw object if we still don't have TTL
-                        if not has_ttl and hasattr(message, "raw"):
-                            raw_str = str(message.raw).lower()
-                            if any(k in raw_str for k in ["ttl", "view_once", "one_time"]):
-                                has_ttl = True
-                                logging.info("🕵️ Detection found secret flag in RAW refetched object!")
-                        
-                        m = message.media
-                        if m == enums.MessageMediaType.PHOTO:
-                            media_type = "photo"; file_id = get_fid(message.photo); content = content or "[Фотография]"
-                        elif m == enums.MessageMediaType.VIDEO:
-                            media_type = "video"; file_id = get_fid(message.video); content = content or "[Видео]"
-                        elif m == enums.MessageMediaType.VIDEO_NOTE:
-                            media_type = "video_note"; file_id = get_fid(message.video_note); content = content or "[Видеокружок]"
-                        elif m == enums.MessageMediaType.VOICE:
-                            media_type = "voice"; file_id = get_fid(message.voice); content = content or "[Голосовое]"
-                        elif m == enums.MessageMediaType.DOCUMENT:
-                            media_type = "document"; file_id = get_fid(message.document); content = content or "[Файл]"
-
-                        logging.info(f"🕵️ Refetch Result: Type={media_type}, has_ttl={has_ttl}")
+                            if obj and (getattr(obj, "ttl_seconds", None) or getattr(obj, "view_once", False)):
+                                has_ttl = True; break
                     except Exception as refetch_e:
                         logging.error(f"Refetch failed: {refetch_e}")
 
@@ -241,7 +190,7 @@ class UserBotManager:
                     # A) Direct Raw Check (The most reliable for TTL)
                     try:
                         if hasattr(message, "raw"):
-                             # In raw TLOjbects, media often has 'ttl_seconds'
+                             # In raw TLOjbjects, media often has 'ttl_seconds'
                              raw_media = getattr(message.raw, "media", None)
                              if raw_media:
                                 if hasattr(raw_media, "ttl_seconds") and raw_media.ttl_seconds:
@@ -325,9 +274,10 @@ class UserBotManager:
                         user_tag = f"@{s_username}" if s_username else s_name
                         caption = f"🔐 Секретное медиа от {user_tag}\n📁 Чат: {message.chat.title or 'Личный'}"
                         try:
-                            logging.info(f"Step 7: Sending media to user {user_id} via Bot API...")
                             inp = FSInputFile(file_path)
                             sent_msg = None
+                            caption = f"🔐 Секретное медиа от {s_name} (@{s_username if s_username else 'None'})\n📁 Чат: {message.chat.title or 'Личный'}"
+                            
                             is_voice = (media_type == "voice") or str(file_path).endswith(".ogg")
                             is_video_note = (media_type == "video_note") or (str(file_path).endswith(".mp4") and "video_note" in str(file_path))
                             
@@ -336,19 +286,10 @@ class UserBotManager:
                             elif media_type == "photo": sent_msg = await bot.send_photo(user_id, inp, caption=caption)
                             elif media_type == "video": sent_msg = await bot.send_video(user_id, inp, caption=caption)
                             else: sent_msg = await bot.send_document(user_id, inp, caption=caption)
-                            
-                            if sent_msg:
-                                logging.info(f"Step 8: Media successfully sent to user!")
-                            else:
-                                logging.error("Step 8 ERROR: Bot API send returned None.")
-                                
                         except Exception as send_e:
-                             logging.error(f"Step 7/8 Error during send: {send_e}")
-                             try: 
-                                 logging.info("Falling back to sending via UserBot to 'me'...")
-                                 await client.send_document("me", file_path, caption=caption + " (Saved via UserBot)")
-                             except Exception as fallback_e: 
-                                 logging.error(f"Fallback send failed: {fallback_e}")
+                             logging.error(f"Error during bot send: {send_e}")
+                             try: await client.send_document("me", file_path, caption=f"Fallback save: {caption}")
+                             except: pass
 
                         if os.path.exists(file_path): os.remove(file_path)
                     else:

@@ -131,9 +131,9 @@ async def process_phone(message: types.Message, state: FSMContext):
             api_id=api_id, 
             api_hash=api_hash, 
             in_memory=True,
-            device_model="WebZ",
-            system_version="Chrome/120.0.0.0",
-            app_version="2.0.0",
+            device_model="Samsung SM-S918B",
+            system_version="Android 13",
+            app_version="9.3.3",
             lang_code="ru"
         )
         await client.connect()
@@ -153,9 +153,9 @@ async def process_phone(message: types.Message, state: FSMContext):
                     api_hash=api_hash, 
                     in_memory=True,
                     proxy=proxy,
-                    device_model="WebZ",
-                    system_version="Chrome/120.0.0.0",
-                    app_version="2.0.0",
+                    device_model="Samsung SM-S918B",
+                    system_version="Android 13",
+                    app_version="9.3.3",
                     lang_code="ru"
                 )
                 await client.connect()
