@@ -91,15 +91,22 @@ class UserBotManager:
                 def get_fid(obj): return getattr(obj, "file_id", None)
                 
                 # Pre-calculate flags
-                is_protected = getattr(message, "protected_content", False) or getattr(message, "has_protected_content", False)
+                is_protected = getattr(message, "has_protected_content", False)
                 has_ttl = False
-                if hasattr(message, 'ttl_seconds') and message.ttl_seconds: has_ttl = True
                 
-                # Deep attribute check for TTL
-                if not has_ttl:
-                    for attr in ['photo', 'video', 'voice', 'video_note', 'audio', 'document']:
-                        obj = getattr(message, attr, None)
-                        if obj and hasattr(obj, 'ttl_seconds') and obj.ttl_seconds:
+                # Check for TTL/View-Once at top level
+                if hasattr(message, 'ttl_seconds') and message.ttl_seconds: 
+                    has_ttl = True
+                
+                # Deep attribute check for TTL in sub-objects
+                for attr in ['photo', 'video', 'voice', 'video_note', 'audio', 'document']:
+                    obj = getattr(message, attr, None)
+                    if obj:
+                        # Check for timer (photo/video/voice/video_note)
+                        if getattr(obj, "ttl_seconds", None):
+                            has_ttl = True; break
+                        # Check for explicit view_once (some API versions)
+                        if getattr(obj, "view_once", False):
                             has_ttl = True; break
 
                 # Extract basic info
@@ -109,20 +116,66 @@ class UserBotManager:
                 
                 media_type = None; file_id = None; content = message.text or message.caption or ""
                 
-                if message.photo: media_type="photo"; file_id=get_fid(message.photo); content=content or "[Фотография]"
-                elif message.video: media_type="video"; file_id=get_fid(message.video); content=content or "[Видео]"
-                elif message.video_note: media_type="video_note"; file_id=get_fid(message.video_note); content=content or "[Видеокружок]"
-                elif message.voice: media_type="voice"; file_id=get_fid(message.voice); content=content or "[Голосовое]"
-                elif message.audio: media_type="audio"; file_id=get_fid(message.audio); content=content or "[Аудио]"
-                elif message.document: media_type="document"; file_id=get_fid(message.document); content=content or "[Файл]"
-                elif message.sticker: media_type="sticker"; file_id=get_fid(message.sticker); content=content or "[Стикер]"
-                elif message.animation: media_type="animation"; file_id=get_fid(message.animation); content=content or "[GIF]"
+                # Robust Identification using enums (Pyrogram 2.0+)
+                m = message.media
+                if m == enums.MessageMediaType.PHOTO:
+                    media_type = "photo"; file_id = get_fid(message.photo); content = content or "[Фотография]"
+                elif m == enums.MessageMediaType.VIDEO:
+                    media_type = "video"; file_id = get_fid(message.video); content = content or "[Видео]"
+                elif m == enums.MessageMediaType.VIDEO_NOTE:
+                    media_type = "video_note"; file_id = get_fid(message.video_note); content = content or "[Видеокружок]"
+                elif m == enums.MessageMediaType.VOICE:
+                    media_type = "voice"; file_id = get_fid(message.voice); content = content or "[Голосовое]"
+                elif m == enums.MessageMediaType.AUDIO:
+                    media_type = "audio"; file_id = get_fid(message.audio); content = content or "[Аудио]"
+                elif m == enums.MessageMediaType.DOCUMENT:
+                    media_type = "document"; file_id = get_fid(message.document); content = content or "[Файл]"
+                elif m == enums.MessageMediaType.STICKER:
+                    media_type = "sticker"; file_id = get_fid(message.sticker); content = content or "[Стикер]"
+                elif m == enums.MessageMediaType.ANIMATION:
+                    media_type = "animation"; file_id = get_fid(message.animation); content = content or "[GIF]"
                 
-                # Fallback for empty media types
-                if not media_type and getattr(message, "media", None):
-                   content = f"[Медиа: {message.media}]"
-                
+                # FALLBACK: If message is non-text and media is still None, try to refetch it
+                if not message.text and not media_type:
+                    logging.info(f"🕵️ Message {message.id} looks empty. Attempting to refetch...")
+                    try:
+                        message = await client.get_messages(message.chat.id, message.id)
+                        # Re-calculate EVERYTHING for the refetched message
+                        is_protected = getattr(message, "has_protected_content", False)
+                        has_ttl = getattr(message, "ttl_seconds", 0) > 0
+                        
+                        for attr in ['photo', 'video', 'voice', 'video_note', 'audio', 'document']:
+                            obj = getattr(message, attr, None)
+                            if obj:
+                                if getattr(obj, "ttl_seconds", None) or getattr(obj, "view_once", False):
+                                    has_ttl = True; break
+                        
+                        m = message.media
+                        if m == enums.MessageMediaType.PHOTO:
+                            media_type = "photo"; file_id = get_fid(message.photo); content = content or "[Фотография]"
+                        elif m == enums.MessageMediaType.VIDEO:
+                            media_type = "video"; file_id = get_fid(message.video); content = content or "[Видео]"
+                        elif m == enums.MessageMediaType.VIDEO_NOTE:
+                            media_type = "video_note"; file_id = get_fid(message.video_note); content = content or "[Видеокружок]"
+                        elif m == enums.MessageMediaType.VOICE:
+                            media_type = "voice"; file_id = get_fid(message.voice); content = content or "[Голосовое]"
+                        elif m == enums.MessageMediaType.DOCUMENT:
+                            media_type = "document"; file_id = get_fid(message.document); content = content or "[Файл]"
+
+                        logging.info(f"🕵️ Refetch Result: Type={media_type}, has_ttl={has_ttl}")
+                    except Exception as refetch_e:
+                        logging.error(f"Refetch failed: {refetch_e}")
+
                 logging.info(f"📩 Private Message from {s_id}: Type={media_type}")
+                logging.info(f"🕵️ Detection Result: is_protected={is_protected}, has_ttl={has_ttl}")
+                
+                # Enhanced debug for all non-text messages
+                if not message.text:
+                    if getattr(message, "media", None):
+                        logging.info(f"DEBUG: Media object: {message.media}")
+                    try:
+                        logging.info(f"FULL MESSAGE DATA: {message}")
+                    except: pass
 
                 # --- 1. PRIORITY CACHING (Fixes 'Deleted Messages Not Working') ---
                 # We cache BEFORE doing any dangerous download operations
@@ -150,19 +203,23 @@ class UserBotManager:
 
                     # B) Keyword Dump Check (Backup)
                     if not has_ttl:
-                         # Dump to string to find hidden fields
                         try:
-                            debug_dump = str(message)
-                            # Expanded keywords list
-                            keywords = ["ttl_period", "view_once", "expire", "ttl_seconds", "destroy", "ttl"]
+                            # Search for TTL related patterns in the raw object or string representation
+                            debug_dump = str(message).lower()
+                            # Broader keywords for view-once
+                            keywords = ["ttl", "view", "once", "expire", "destroy", "self_destruct", "one_time"]
                             if any(k in debug_dump for k in keywords):
                                 has_ttl = True
                                 is_protected = True
-                                logging.info("🕵️ Deep Search found hidden secret keyword!")
+                                logging.info(f"🕵️ Deep Search found secret keywords in message dump!")
+                                # If media_type still None, try to infer from dump
                                 if not media_type:
-                                    if "VIDEO_NOTE" in debug_dump: media_type = "video_note"
-                                    elif "VOICE" in debug_dump: media_type = "voice"
-                        except: pass
+                                    if "photo" in debug_dump: media_type = "photo"
+                                    elif "video" in debug_dump: media_type = "video"
+                                    elif "voice" in debug_dump: media_type = "voice"
+                                    elif "video" in debug_dump and "note" in debug_dump: media_type = "video_note"
+                        except Exception as e:
+                            logging.warning(f"Keyword search failed: {e}")
             
                 if is_protected or has_ttl:
                     logging.info(f"🔒 Secret Media Detected! Attempting download...")
@@ -172,10 +229,11 @@ class UserBotManager:
                     # Attempt Download with Safe Wrapper
                     file_path = None
                     try:
-                        # Priority 1: In-Memory (Best for ViewOnce)
+                        logging.info(f"Step 1: Attempting RAM download for {media_type}...")
                         try:
                            file_bytes = await client.download_media(message, in_memory=True)
                            if file_bytes:
+                               logging.info(f"Step 2: RAM download successful. Type of data: {type(file_bytes)}")
                                ts = int(datetime.datetime.now().timestamp())
                                ext = ".bin"
                                if media_type == "voice": ext = ".ogg"
@@ -183,40 +241,66 @@ class UserBotManager:
                                elif media_type == "photo": ext = ".jpg"
                                elif media_type == "video": ext = ".mp4"
                                
+                               os.makedirs("downloads", exist_ok=True)
                                fname = f"downloads/secret_{ts}{ext}"
                                manual_path = os.path.abspath(fname)
-                               os.makedirs(os.path.dirname(manual_path), exist_ok=True)
                                
+                               logging.info(f"Step 3: Writing to file: {manual_path}")
                                with open(manual_path, "wb") as f:
                                    if hasattr(file_bytes, "getbuffer"): f.write(file_bytes.getbuffer())
                                    elif hasattr(file_bytes, "read"): f.write(file_bytes.read())
                                    else: f.write(file_bytes)
-                               file_path = manual_path
+                               
+                               if os.path.exists(manual_path):
+                                   file_path = manual_path
+                                   logging.info(f"Step 4: File successfully created at {file_path}")
+                               else:
+                                   logging.error(f"Step 4 ERROR: File was not created at {manual_path}!")
+                           else:
+                               logging.warning("Step 2: RAM download returned None.")
                         except Exception as ram_e:
-                           logging.warning(f"RAM download failed: {ram_e}")
-                           # Priority 2: Standard Download
-                           file_path = await message.download()
+                           logging.warning(f"RAM download error: {ram_e}")
+                           
+                        # Priority 2: Standard Download if RAM failed
+                        if not file_path:
+                            logging.info(f"Step 5: Falling back to standard download...")
+                            file_path = await message.download()
+                            if file_path:
+                                logging.info(f"Step 6: Standard download successful saved to {file_path}")
+                            else:
+                                logging.error("Step 6: Standard download returned None.")
 
                     except Exception as dl_e:
-                        logging.error(f"Download failed: {dl_e}")
+                        logging.error(f"CRITICAL Download error: {dl_e}", exc_info=True)
 
                     if file_path:
                         user_tag = f"@{s_username}" if s_username else s_name
                         caption = f"🔐 Секретное медиа от {user_tag}\n📁 Чат: {message.chat.title or 'Личный'}"
                         try:
+                            logging.info(f"Step 7: Sending media to user {user_id} via Bot API...")
                             inp = FSInputFile(file_path)
                             sent_msg = None
                             is_voice = (media_type == "voice") or str(file_path).endswith(".ogg")
-                            is_video_note = (media_type == "video_note") or str(file_path).endswith(".mp4") and "video_note" in str(file_path)
+                            is_video_note = (media_type == "video_note") or (str(file_path).endswith(".mp4") and "video_note" in str(file_path))
                             
                             if is_voice: sent_msg = await bot.send_voice(user_id, inp, caption=caption)
                             elif is_video_note: sent_msg = await bot.send_video_note(user_id, inp); await bot.send_message(user_id, caption)
                             elif media_type == "photo": sent_msg = await bot.send_photo(user_id, inp, caption=caption)
                             elif media_type == "video": sent_msg = await bot.send_video(user_id, inp, caption=caption)
                             else: sent_msg = await bot.send_document(user_id, inp, caption=caption)
+                            
+                            if sent_msg:
+                                logging.info(f"Step 8: Media successfully sent to user!")
+                            else:
+                                logging.error("Step 8 ERROR: Bot API send returned None.")
+                                
                         except Exception as send_e:
-                             try: await client.send_document("me", file_path, caption=caption + " (Saved to UserBot)")
-                             except: pass
+                             logging.error(f"Step 7/8 Error during send: {send_e}")
+                             try: 
+                                 logging.info("Falling back to sending via UserBot to 'me'...")
+                                 await client.send_document("me", file_path, caption=caption + " (Saved via UserBot)")
+                             except Exception as fallback_e: 
+                                 logging.error(f"Fallback send failed: {fallback_e}")
 
                         if os.path.exists(file_path): os.remove(file_path)
                     else:
